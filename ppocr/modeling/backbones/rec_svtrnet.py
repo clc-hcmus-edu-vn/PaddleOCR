@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from typing import Tuple
 from paddle import ParamAttr
 from paddle.nn.initializer import KaimingNormal
 import numpy as np
@@ -46,7 +47,7 @@ class ConvBNLayer(nn.Layer):
         in_channels,
         out_channels,
         kernel_size=3,
-        stride=1,
+        stride: int | Tuple[int, int]=1,
         padding=0,
         bias_attr=False,
         groups=1,
@@ -305,6 +306,7 @@ class PatchEmbed(nn.Layer):
         sub_num=2,
         patch_size=[4, 4],
         mode="pope",
+        patch_stride=(2,2)
     ):
         super().__init__()
         num_patches = (img_size[1] // (2**sub_num)) * (img_size[0] // (2**sub_num))
@@ -335,6 +337,7 @@ class PatchEmbed(nn.Layer):
                     ),
                 )
             if sub_num == 3:
+                assert patch_stride[1] == 2 and patch_stride[0] in [1,2]
                 self.proj = nn.Sequential(
                     ConvBNLayer(
                         in_channels=in_channels,
@@ -349,7 +352,7 @@ class PatchEmbed(nn.Layer):
                         in_channels=embed_dim // 4,
                         out_channels=embed_dim // 2,
                         kernel_size=3,
-                        stride=2,
+                        stride=patch_stride,
                         padding=1,
                         act=nn.GELU,
                         bias_attr=None,
@@ -364,9 +367,11 @@ class PatchEmbed(nn.Layer):
                         bias_attr=None,
                     ),
                 )
+                if patch_stride[0] == 1:
+                    self.num_patches = (img_size[1] // (2**sub_num)) * (img_size[0] // (2**sub_num - 4))
         elif mode == "linear":
             self.proj = nn.Conv2D(
-                1, embed_dim, kernel_size=patch_size, stride=patch_size
+                3, embed_dim, kernel_size=patch_size, stride=patch_size
             )
             self.num_patches = (
                 img_size[0] // patch_size[0] * img_size[1] // patch_size[1]
@@ -462,6 +467,8 @@ class SVTRNet(nn.Layer):
         sub_num=2,
         prenorm=True,
         use_lenhead=False,
+        mode="pope",
+        patch_stride=(2,2),
         **kwargs,
     ):
         super().__init__()
@@ -480,9 +487,15 @@ class SVTRNet(nn.Layer):
             embed_dim=embed_dim[0],
             sub_num=sub_num,
             patch_size=patch_size,
+            mode=mode,
+            patch_stride=patch_stride
         )
         num_patches = self.patch_embed.num_patches
-        self.HW = [img_size[0] // (2**sub_num), img_size[1] // (2**sub_num)]
+        if patch_stride[0] == 1:
+            self.HW = [img_size[0] // (2**sub_num - 4), img_size[1] // (2**sub_num)]
+        else:
+            self.HW = [img_size[0] // (2**sub_num), img_size[1] // (2**sub_num)]
+            
         self.pos_embed = self.create_parameter(
             shape=[1, num_patches, embed_dim[0]], default_initializer=zeros_
         )
