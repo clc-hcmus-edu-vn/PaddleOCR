@@ -18,17 +18,15 @@ https://github.com/PaddlePaddle/PaddleClas/blob/2f36cab604e439b59d1a854df34ece3b
 
 from __future__ import absolute_import, division, print_function
 
-import math
 import numpy as np
 import paddle
 import paddle.nn as nn
 import paddle.nn.functional as F
 from paddle import ParamAttr
-from paddle.nn import Conv2D, BatchNorm, Linear, BatchNorm2D, MaxPool2D, AvgPool2D
-from paddle.nn.initializer import Uniform
+from paddle.nn import Conv2D, BatchNorm2D
 from paddle.regularizer import L2Decay
 
-from typing import Tuple, List, Dict, Union, Callable, Any
+from typing import List, Dict, Union, Callable
 from ppocr.modeling.backbones.rec_donut_swin import DonutSwinModelOutput
 
 
@@ -499,8 +497,6 @@ class TheseusLayer(nn.Layer):
         # init the output of net
         if return_patterns or return_stages:
             if return_patterns and return_stages:
-                msg = f"The 'return_patterns' would be ignored when 'return_stages' is set."
-
                 return_stages = None
 
             if return_stages is True:
@@ -511,8 +507,6 @@ class TheseusLayer(nn.Layer):
                 return_stages = [return_stages]
             if isinstance(return_stages, list):
                 if max(return_stages) > len(stages_pattern) or min(return_stages) < 0:
-                    msg = f"The 'return_stages' set error. Illegal value(s) have been ignored. The stages' pattern list is {stages_pattern}."
-
                     return_stages = [
                         val
                         for val in return_stages
@@ -536,7 +530,6 @@ class TheseusLayer(nn.Layer):
             self.stop_after(stop_after)
 
     def init_res(self, stages_pattern, return_patterns=None, return_stages=None):
-
         if return_patterns and return_stages:
             return_stages = None
 
@@ -648,7 +641,6 @@ class TheseusLayer(nn.Layer):
         for layer_dict in layer_list:
             name, index_list = layer_dict["name"], layer_dict["index_list"]
             if not set_identity(parent_layer, name, index_list):
-                msg = f"Failed to set the layers that after stop_layer_name('{stop_layer_name}') to IdentityLayer. The error layer's name is '{name}'."
                 return False
             parent_layer = layer_dict["layer"]
 
@@ -680,7 +672,6 @@ class TheseusLayer(nn.Layer):
 
         res = self.upgrade_sublayer(layer_name, stop_grad)
         if len(res) == 0:
-            msg = "Failed to stop the gradient before the layer named '{layer_name}'"
             return False
         return True
 
@@ -789,7 +780,6 @@ def parse_pattern_str(
 
     pattern_list = pattern.split(".")
     if not pattern_list:
-        msg = f"The pattern('{pattern}') is illegal. Please check and retry."
         return None
 
     layer_list = []
@@ -806,7 +796,6 @@ def parse_pattern_str(
         target_layer = getattr(parent_layer, target_layer_name, None)
 
         if target_layer is None:
-            msg = f"Not found layer named('{target_layer_name}') specified in pattern('{pattern}')."
             return None
 
         if target_layer_index_list:
@@ -814,7 +803,7 @@ def parse_pattern_str(
                 if int(target_layer_index) < 0 or int(target_layer_index) >= len(
                     target_layer
                 ):
-                    msg = f"Not found layer by index('{target_layer_index}') specified in pattern('{pattern}'). The index should < {len(target_layer)} and > 0."
+                    f"Not found layer by index('{target_layer_index}') specified in pattern('{pattern}'). The index should < {len(target_layer)} and > 0."
                     return None
                 target_layer = target_layer[target_layer_index]
 
@@ -882,13 +871,9 @@ class AdaptiveAvgPool2D(nn.AdaptiveAvgPool2D):
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import paddle
 import paddle.nn as nn
-import paddle.nn.functional as F
 from paddle.nn.initializer import KaimingNormal, Constant
-from paddle.nn import Conv2D, BatchNorm2D, ReLU, AdaptiveAvgPool2D, MaxPool2D
-from paddle.regularizer import L2Decay
-from paddle import ParamAttr
+from paddle.nn import ReLU, AdaptiveAvgPool2D
 
 MODEL_URLS = {
     "PPHGNetV2_B0": "https://paddle-imagenet-models-name.bj.bcebos.com/dygraph/legendary_models/PPHGNetV2_B0_ssld_pretrained.pdparams",
@@ -1239,7 +1224,6 @@ class HGV2_Stage(TheseusLayer):
         stride=2,
         lr_mult=1.0,
     ):
-
         super().__init__()
         self.is_downsample = is_downsample
         if self.is_downsample:
@@ -1300,9 +1284,9 @@ class PPHGNetV2(TheseusLayer):
         stage_config,
         stem_channels=[3, 32, 64],
         use_lab=False,
-        use_last_conv=True,
+        use_last_conv=False,
         class_expand=2048,
-        dropout_prob=0.0,
+        dropout_prob=0.1,
         class_num=1000,
         lr_mult_list=[1.0, 1.0, 1.0, 1.0, 1.0],
         det=False,
@@ -1318,6 +1302,9 @@ class PPHGNetV2(TheseusLayer):
         self.class_expand = class_expand
         self.class_num = class_num
         self.out_indices = out_indices if out_indices is not None else [0, 1, 2, 3]
+        self.out_char_num = kwargs.get("out_char_num", 40)
+        self.out_avg_kernel_size = kwargs.get("out_avg_kernel_size", [3, 2])
+        self.use_glb_avg = kwargs.get("use_glb_avg", False)
         self.out_channels = []
 
         # stem
@@ -1368,17 +1355,18 @@ class PPHGNetV2(TheseusLayer):
 
         if self.use_last_conv:
             self.last_conv = Conv2D(
-                in_channels=out_channels,
+                in_channels=self.out_channels,
                 out_channels=self.class_expand,
                 kernel_size=1,
                 stride=1,
                 padding=0,
                 bias_attr=False,
             )
-            self.act = ReLU()
+            self.act = nn.Hardswish()
             if self.use_lab:
                 self.lab = LearnableAffineBlock()
             self.dropout = nn.Dropout(p=dropout_prob, mode="downscale_in_infer")
+            self.out_channels = self.class_expand
 
         self.flatten = nn.Flatten(start_axis=1, stop_axis=-1)
         if not self.det:
@@ -1410,10 +1398,16 @@ class PPHGNetV2(TheseusLayer):
             return out
 
         if self.text_rec:
-            if self.training:
-                x = F.adaptive_avg_pool2d(x, [1, 40])
+            if self.training or self.use_glb_avg:
+                x = F.adaptive_avg_pool2d(x, [1, self.out_char_num])
             else:
-                x = F.avg_pool2d(x, [3, 2])
+                x = F.avg_pool2d(x, self.out_avg_kernel_size)
+            if self.use_last_conv:
+                x = self.last_conv(x)
+                if self.use_lab:
+                    x = self.lab(x)
+                x = self.act(x)
+                x = self.dropout(x)
         return x
 
 
@@ -1531,6 +1525,9 @@ def PPHGNetV2_B4(pretrained=False, use_ssld=False, det=False, text_rec=False, **
         "stage4": [1024, 384, 2048, 1, True, True, 5, 6, [2, 1]],
     }
 
+    if kwargs.get("stage_config_rec") and text_rec:
+        stage_config_rec = kwargs.get("stage_config_rec")
+
     stage_config_det = {
         # in_channels, mid_channels, out_channels, num_blocks, is_downsample, light_block, kernel_size, layer_num
         "stage1": [48, 48, 128, 1, False, False, 3, 6, 2],
@@ -1538,10 +1535,12 @@ def PPHGNetV2_B4(pretrained=False, use_ssld=False, det=False, text_rec=False, **
         "stage3": [512, 192, 1024, 3, True, True, 5, 6, 2],
         "stage4": [1024, 384, 2048, 1, True, True, 5, 6, 2],
     }
+
+    if "stem_channels" not in kwargs:
+        kwargs["stem_channels"] = [3, 32, 48]
+
     model = PPHGNetV2(
-        stem_channels=[3, 32, 48],
         stage_config=stage_config_det if det else stage_config_rec,
-        use_lab=False,
         det=det,
         text_rec=text_rec,
         **kwargs,
@@ -1653,7 +1652,6 @@ class PPHGNetV2_B4_Formula(nn.Layer):
             return pphgnet_b4_output, label, attention_mask
         else:
             return pphgnet_b4_output
-
 
 class PPHGNetV2_B6_Formula(nn.Layer):
     """

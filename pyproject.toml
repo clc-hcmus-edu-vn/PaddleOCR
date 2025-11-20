@@ -54,7 +54,6 @@ dependencies = [
     "rapidfuzz>=3.9.7",
     "requests",
     "scikit-image>=0.21.0",
-    "setuptools>=75.3.2",
     "shapely>=2.0.7",
     "tqdm>=4.67.1",
     "typing-extensions>=4.12",
